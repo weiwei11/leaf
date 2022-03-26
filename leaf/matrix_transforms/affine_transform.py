@@ -67,7 +67,7 @@ def reflect2matrix(direction, offset):
     return m_t2 @ m_r2 @ m @ m_r1 @ m_t1
 
 
-def shear(dx, dy, x_limit=1, y_limit=1):
+def shear2matrix(dx, dy, x_limit=1, y_limit=1):
     """
 
     :param dx: offset of x
@@ -182,7 +182,7 @@ if __name__ == '__main__':
 
     dx, dy = 5, 10
     x_limit, y_limit = 50, 50
-    s5 = shear(dx, dy, x_limit, y_limit)
+    s5 = shear2matrix(dx, dy, x_limit, y_limit)
     img5 = cv2.warpAffine(img, s5[:2, :], size, flags=cv2.INTER_LINEAR)
     plt.subplot(2, 3, 6)
     plt.imshow(img5)
