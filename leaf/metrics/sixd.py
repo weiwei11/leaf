@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from leaf.metrics.metric import BaseMetric
-from leaf.metrics.functional.sixd import projection_2d, add, cm_degree, add_error, add_auc
+from .metric import BaseMetric
+from .functional.sixd import projection_2d, add, cm_degree, add_error, add_auc
 
 
 class Projection2d(BaseMetric):
@@ -13,7 +13,6 @@ class Projection2d(BaseMetric):
     :param name: name of the metric
     :param model: shape (N, 3), 3D points cloud of object
     :param threshold: default is 5 pixel
-    :return: float
 
     >>> import numpy as np
     >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
@@ -47,7 +46,6 @@ class ADD(BaseMetric):
     :param threshold: distance threshold, 'threshold' and 'model_diameter percentage' is not compatible
     :param diameter: the diameter of object
     :param percentage: percentage of model diameter
-    :return: float
 
     >>> import numpy as np
     >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
@@ -78,7 +76,6 @@ class Cmd(BaseMetric):
     :param cm_threshold: unit is centimeter
     :param degree_threshold:
     :param unit_scale: scale for meter
-    :return: float
 
     >>> import numpy as np
     >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
@@ -115,7 +112,6 @@ class ADDAUC(BaseMetric):
     :param max_threshold: max error threshold, so threshold is [0, max]
     :param unit_scale: scale for meter unit
     :param symmetric: whether the object is symmetric or not
-    :return:
 
     >>> import numpy as np
     >>> model_xyz = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])

@@ -3,13 +3,13 @@
 import numpy as np
 
 try:
-    from leaf.csrc.nn import nn_utils
+    from ...csrc.nn import nn_utils
 
     def nearest_point_distance(model_pred, model_targets):
         idxs = nn_utils.find_nearest_point_idx(model_pred, model_targets)
         dist = np.linalg.norm(model_pred[idxs] - model_targets, 2, 1)
         return dist
-except:
+except ImportError:
     from scipy import spatial
 
     def nearest_point_distance(model_pred, model_targets):
@@ -75,7 +75,7 @@ def add_error(pose_pred, pose_target, model_xyz, symmetric=False):
     model_target = np.dot(model_xyz, pose_target[:, :3].T) + pose_target[:, 3]
 
     if symmetric:
-        mean_dist = np.mean(nearest_point_distance(model_target, model_target))
+        mean_dist = np.mean(nearest_point_distance(model_pred, model_target))
     else:
         mean_dist = np.mean(np.linalg.norm(model_pred - model_target, axis=-1))
     return mean_dist
