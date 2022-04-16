@@ -7,7 +7,7 @@ import numpy as np
 
 
 def test_compose(model, model_diameter, pose_list, K):
-    pose_metric = Compose('pose_metric',
+    pose_metric = Compose('pose_metric', False,
                           Projection2d('proj2d', model),
                           ADD('add-1', model, diameter=model_diameter, percentage=1),
                           ADD('add-0.1', model, diameter=model_diameter, percentage=0.1),

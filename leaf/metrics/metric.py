@@ -28,22 +28,30 @@ class BaseMetric:
 
 
 class Compose(BaseMetric):
-    def __init__(self, name='', *metrics):
+    def __init__(self, name='', out_as_in=False, *metrics):
         super().__init__(name)
+        self.out_as_in = out_as_in
         self.metrics = metrics
 
     def __call__(self, data, data_mode='mix'):
+        result_dict = {}
         if data_mode == 'mix':
             for m in self.metrics:
-                filter_parameters(m, data)
+                if not self.out_as_in:
+                    res = filter_parameters(m, data)
+                else:
+                    res = filter_parameters(m, {**data, **result_dict})
+                result_dict.update({m.name: res})
         elif data_mode == 'seq':
             for m, d in zip(self.metrics, data):
                 if isinstance(d, dict):
-                    m(**d)
+                    res = m(**d)
                 else:
-                    m(*d)
+                    res = m(*d)
+                result_dict.update({m.name: res})
         else:
             raise ValueError('data_mode must be mix or seq')
+        return result_dict
 
     def summarize(self, data_mode='dict'):
         if data_mode == 'dict':

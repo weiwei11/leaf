@@ -2,8 +2,68 @@
 
 import numpy as np
 
-from .metric import BaseMetric
-from .functional.sixd import projection_2d, add, cm_degree, add_error, add_auc
+from .metric import BaseMetric, filter_parameters, Compose
+from .functional.sixd import projection_2d, add, cm_degree, add_error, add_auc, nearest_point_distance, angular_error, \
+    translation_error
+
+
+class PoseCompose(Compose):
+    def __init__(self, name='', model=None, symmetric=False, out_as_in=False, *metrics):
+        super().__init__(name)
+        self.model = model
+        self.symmetric = symmetric
+        self.out_as_in = out_as_in
+        self.metrics = metrics
+
+    def _compute_common_data(self, predict_pose, target_pose, K):
+        model_pred = np.dot(self.model, predict_pose[:, :3].T) + predict_pose[:, 3]
+        model_target = np.dot(self.model, target_pose[:, :3].T) + target_pose[:, 3]
+
+        proj_pred = np.dot(model_pred, K.T)
+        proj_pred = proj_pred[:, :2] / proj_pred[:, 2:]
+        proj_target = np.dot(model_target, K.T)
+        proj_target = proj_target[:, :2] / proj_target[:, 2:]
+
+        # add error
+        if self.symmetric:
+            add_err = np.mean(nearest_point_distance(model_pred, model_target))
+        else:
+            add_err = np.mean(np.linalg.norm(model_pred - model_target, axis=-1))
+
+        # projection error
+        proj_err = np.mean(np.linalg.norm(proj_pred - proj_target, axis=-1))
+
+        # angular error
+        angular_err = angular_error(predict_pose, target_pose)
+
+        # translation error
+        translation_err = translation_error(predict_pose, target_pose)
+
+        return {'add_err': add_err, 'projection_err': proj_err, 'angular_err': angular_err, 'translation_err': translation_err}
+
+    def __call__(self, data, data_mode='mix'):
+        result_dict = {}
+        if data_mode == 'mix':
+            res = self._compute_common_data(data['predict_pose'], data['target_pose'], data['K'])
+            data.update(res)
+            for m in self.metrics:
+                if not self.out_as_in:
+                    res = filter_parameters(m, data)
+                else:
+                    res = filter_parameters(m, {**data, **result_dict})
+                result_dict.update({m.name: res})
+        elif data_mode == 'seq':
+            res = self._compute_common_data(data['predict_pose'], data['target_pose'], data['K'])
+            data.update(res)
+            for m, d in zip(self.metrics, data):
+                if isinstance(d, dict):
+                    res = m(**d)
+                else:
+                    res = m(*d)
+                result_dict.update({m.name: res})
+        else:
+            raise ValueError('data_mode must be mix or seq')
+        return result_dict
 
 
 class Projection2d(BaseMetric):
@@ -24,16 +84,21 @@ class Projection2d(BaseMetric):
     >>> proj_metric.summarize()
     1.0
     """
-
     def __init__(self, name='Projection2d', model=None, threshold=5):
 
         super().__init__(name)
         self.model = model
         self.threshold = threshold
 
-    def __call__(self, predict_pose, target_pose, K):
-        result = projection_2d(predict_pose, target_pose, K, self.model, self.threshold)
+    def __call__(self, predict_pose, target_pose, K, projection_err=None):
+        if projection_err is None:
+            result = projection_2d(predict_pose, target_pose, K, self.model, self.threshold)
+        else:
+            result = projection_err < self.threshold
+
         self.result_list.append(result)
+
+        return result
 
 
 class ADD(BaseMetric):
@@ -63,9 +128,76 @@ class ADD(BaseMetric):
         self.symmetric = symmetric
         self.threshold = threshold if threshold is not None else diameter * percentage
 
-    def __call__(self, predict_pose, target_pose):
-        result = add(predict_pose, target_pose, self.model, self.symmetric, self.threshold)
+    def __call__(self, predict_pose, target_pose, add_err=None):
+        if add_err is None:
+            result = add(predict_pose, target_pose, self.model, self.symmetric, self.threshold)
+        else:
+            result = add_err < self.threshold
         self.result_list.append(result)
+
+        return result
+
+
+class MeanRotationError(BaseMetric):
+    """
+    Mean Rotation Error
+
+    :param name: name of the metric
+
+    >>> import numpy as np
+    >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> pose_target = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> pose_pred1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2]])
+    >>> pose_target1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> re_metric = MeanRotationError()
+    >>> re_metric(pose_pred, pose_target)
+    >>> re_metric(pose_pred1, pose_target1)
+    >>> re_metric.summarize()
+    0.0
+    """
+    def __init__(self, name='Re'):
+        super().__init__(name)
+
+    def __call__(self, predict_pose, target_pose, angular_err=None):
+        if angular_err is None:
+            result = angular_error(predict_pose, target_pose)
+        else:
+            result = angular_err
+        self.result_list.append(result)
+
+        return result
+
+
+class MeanTranslationError(BaseMetric):
+    """
+    Mean Translation Error
+
+    :param name: name of the metric
+    :param unit_scale: scale for meter
+
+    >>> import numpy as np
+    >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> pose_target = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> pose_pred1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2]])
+    >>> pose_target1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> te_metric = MeanTranslationError(unit_scale=1.0)
+    >>> te_metric(pose_pred, pose_target)
+    >>> te_metric(pose_pred1, pose_target1)
+    >>> te_metric.summarize()
+    0.5
+    """
+    def __init__(self, name='Te', unit_scale=1.0):
+        super().__init__(name)
+        self.unit_scale = unit_scale
+
+    def __call__(self, predict_pose, target_pose, translation_err=None):
+        if translation_err is None:
+            result = translation_error(predict_pose, target_pose) * self.unit_scale
+        else:
+            result = translation_err
+        self.result_list.append(result)
+
+        return result
 
 
 class Cmd(BaseMetric):
@@ -94,13 +226,18 @@ class Cmd(BaseMetric):
         self.degree_threshold = degree_threshold
         self.unit_scale = unit_scale
 
-    def __call__(self, predict_pose, target_pose):
-        pred = predict_pose.copy()
-        target = target_pose.copy()
-        pred[:3, 3] = pred[:3, 3] * self.unit_scale
-        target[:3, 3] = target[:3, 3] * self.unit_scale
-        result = cm_degree(pred, target, self.cm_threshold, self.degree_threshold)
+    def __call__(self, predict_pose, target_pose, angular_err=None, translation_err=None):
+        if angular_err is None or translation_err is None:
+            pred = predict_pose.copy()
+            target = target_pose.copy()
+            pred[:3, 3] = pred[:3, 3] * self.unit_scale
+            target[:3, 3] = target[:3, 3] * self.unit_scale
+            result = cm_degree(pred, target, self.cm_threshold, self.degree_threshold)
+        else:
+            result = translation_err * self.unit_scale < 0.01 * self.cm_threshold and angular_err < self.degree_threshold
         self.result_list.append(result)
+
+        return result
 
 
 class ADDAUC(BaseMetric):
@@ -135,8 +272,11 @@ class ADDAUC(BaseMetric):
         self.unit_scale = unit_scale
         self.symmetric = symmetric
 
-    def __call__(self, predict_pose, target_pose):
-        result = add_error(predict_pose, target_pose, self.model, self.symmetric)
+    def __call__(self, predict_pose, target_pose, add_err=None):
+        if add_err is None:
+            result = add_error(predict_pose, target_pose, self.model, self.symmetric)
+        else:
+            result = add_err
         self.result_list.append(result)
 
     def summarize(self):
