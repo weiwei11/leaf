@@ -4,7 +4,7 @@ from math import floor
 
 import numpy as np
 
-from leaf.matrix_transforms import affine_transform as atf
+from ..matrix_transforms import affine_transform as atf
 
 
 def resize(im_size, new_size):

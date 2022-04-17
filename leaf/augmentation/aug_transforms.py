@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 
-from leaf.matrix_transforms.affine_transform import affine_transform
+from ..matrix_transforms.affine_transform import affine_transform
 
 
 def transform_image(image, m, new_size, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0):
@@ -37,7 +37,7 @@ try:
     import torch
 
     def transform_image_pth(images, m, new_size, mode='bilinear', padding_mode='zeros', fill_value=torch.zeros(3), align_corners=True):
-        new_img = kornia.geometry.warp_affine(images, m[:2, :], (new_size[1], new_size[0]), mode=mode,
+        new_img = kornia.geometry.warp_affine(images, m[:, :2, :], (new_size[0], new_size[1]), mode=mode,
                                               padding_mode=padding_mode, fill_value=fill_value, align_corners=align_corners)
         return new_img
 
@@ -60,7 +60,7 @@ try:
         new_bboxes = torch.stack([torch.min(x, dim=-1).values, torch.min(y, dim=-1).values, torch.max(x, dim=-1).values, torch.max(y, dim=-1).values], dim=-1)
 
         return new_bboxes
-except ModuleNotFoundError:
+except ImportError:
     pass
 
 
@@ -123,3 +123,24 @@ if __name__ == '__main__':
     plt.plot(*point5[0].numpy().T, '.')
     plt.plot(*bbox5[0].numpy().reshape(2, 2).T, '.r')
     plt.show()
+
+    import time
+    image = np.random.randn(480, 640, 3)
+    m = translation2matrix(np.array([100.0, 100.0]))[:2, :3]
+    image_tensor = torch.from_numpy(image).cuda().permute(2, 0, 1)[None]
+    m_tensor = torch.from_numpy(m).cuda()[None]
+    it_num = 1000
+
+    t1 = time.time()
+    for i in range(it_num):
+        img = transform_image(image, m, (480, 640))
+    print(img.shape)
+    t2 = time.time()
+    print('numpy time: ', t2 - t1)
+
+    for i in range(it_num):
+        img = transform_image_pth(image_tensor, m_tensor, (480, 640))
+    print(img.shape)
+    torch.cuda.synchronize()
+    t2 = time.time()
+    print('cuda time: ', t2 - t1)

@@ -1,40 +1,40 @@
 # Author: weiwei
 
-import numpy as np
+import torch
 
 from .metric import BaseMetric, filter_parameters, Compose
 from .functional.sixd import projection_2d, add, cm_degree, add_error, add_auc, nearest_point_distance, angular_error, \
     translation_error
-# from leaf.metrics.metric import BaseMetric, filter_parameters, Compose
-# from leaf.metrics.functional.sixd import projection_2d, add, cm_degree, add_error, add_auc, nearest_point_distance, angular_error, \
+# from leaf.torchmetrics.metric import BaseMetric, filter_parameters, Compose
+# from leaf.torchmetrics.functional.sixd import projection_2d, add, cm_degree, add_error, add_auc, nearest_point_distance, angular_error, \
 #     translation_error
 
 
 class PoseCompose(Compose):
     def __init__(self, name='', model=None, symmetric=False, out_as_in=False, *metrics):
         super().__init__(name)
-        self.model = model
+        self.model = model if len(model.shape) > 2 else model.unsqueeze(0)
         self.symmetric = symmetric
         self.out_as_in = out_as_in
         self.metrics = metrics
 
     def _compute_common_data(self, predict_pose, target_pose, K):
-        model_pred = np.dot(self.model, predict_pose[:, :3].T) + predict_pose[:, 3]
-        model_target = np.dot(self.model, target_pose[:, :3].T) + target_pose[:, 3]
+        model_pred = torch.matmul(self.model, predict_pose[..., :3].transpose(-1, -2)) + predict_pose[..., 3].unsqueeze(1)
+        model_target = torch.matmul(self.model, target_pose[..., :3].transpose(-1, -2)) + target_pose[..., 3].unsqueeze(1)
 
-        proj_pred = np.dot(model_pred, K.T)
-        proj_pred = proj_pred[:, :2] / proj_pred[:, 2:]
-        proj_target = np.dot(model_target, K.T)
-        proj_target = proj_target[:, :2] / proj_target[:, 2:]
+        proj_pred = torch.matmul(model_pred, K.transpose(-1, -2))
+        proj_pred = proj_pred[..., :2] / proj_pred[..., 2:]
+        proj_target = torch.matmul(model_target, K.transpose(-1, -2))
+        proj_target = proj_target[..., :2] / proj_target[..., 2:]
 
         # add error
         if self.symmetric:
-            add_err = np.mean(nearest_point_distance(model_pred, model_target))
+            add_err = torch.mean(nearest_point_distance(model_pred, model_target), dim=-1)
         else:
-            add_err = np.mean(np.linalg.norm(model_pred - model_target, axis=-1))
+            add_err = torch.mean(torch.norm(model_pred - model_target, dim=-1), dim=-1)
 
         # projection error
-        proj_err = np.mean(np.linalg.norm(proj_pred - proj_target, axis=-1))
+        proj_err = torch.mean(torch.norm(proj_pred - proj_target, dim=-1), dim=-1)
 
         # angular error
         angular_err = angular_error(predict_pose, target_pose)
@@ -74,18 +74,18 @@ class Projection2d(BaseMetric):
     2D projection
 
     :param name: name of the metric
-    :param model: shape (N, 3), 3D points cloud of object
+    :param model: shape (N, 3) or (b, N, 3), 3D points cloud of object
     :param threshold: default is 5 pixel
 
-    >>> import numpy as np
-    >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_target = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> K = np.array([[320, 0, 320], [0, 320, 240], [0, 0, 1]])
-    >>> model_xyz = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    >>> import torch
+    >>> pose_pred = torch.tensor([[1.0, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]]).unsqueeze(0)
+    >>> pose_target = torch.tensor([[1.0, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]]).unsqueeze(0)
+    >>> K = torch.tensor([[320, 0, 320], [0, 320, 240], [0, 0, 1.0]]).unsqueeze(0)
+    >>> model_xyz = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1.0]]).unsqueeze(0)
     >>> proj_metric = Projection2d(model=model_xyz, threshold=5)
-    >>> proj_metric(pose_pred, pose_target, K)
+    >>> proj_metric(pose_pred, pose_target, K).item()
     True
-    >>> proj_metric.summarize()
+    >>> proj_metric.summarize().item()
     1.0
     """
     def __init__(self, name='Projection2d', model=None, threshold=5):
@@ -110,21 +110,23 @@ class ADD(BaseMetric):
     ADD
 
     :param name: name of the metric
-    :param model: shape (N, 3), 3D points cloud of object
+    :param model: shape (N, 3) or (b, N, 3), 3D points cloud of object
     :param symmetric: whether the object is symmetric or not
     :param threshold: distance threshold, 'threshold' and 'model_diameter percentage' is not compatible
     :param diameter: the diameter of object
     :param percentage: percentage of model diameter
 
-    >>> import numpy as np
-    >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_target = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> model_xyz = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    >>> model_diameter = np.sqrt(3)
+    >>> import torch
+    >>> import math
+    >>> pose_pred = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_target = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> K = torch.tensor([[320, 0, 320], [0, 320, 240], [0, 0, 1.0]]).unsqueeze(0)
+    >>> model_xyz = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1.0]]).unsqueeze(0)
+    >>> model_diameter = math.sqrt(3)
     >>> add_metric = ADD(model=model_xyz, symmetric=False, threshold=None, diameter=model_diameter, percentage=0.1)
-    >>> add_metric(pose_pred, pose_target)
+    >>> add_metric(pose_pred, pose_target).item()
     True
-    >>> add_metric.summarize()
+    >>> add_metric.summarize().item()
     1.0
     """
     def __init__(self, name='ADD', model=None, symmetric=False, threshold=None, diameter=None, percentage=0.1):
@@ -149,17 +151,17 @@ class MeanRotationError(BaseMetric):
 
     :param name: name of the metric
 
-    >>> import numpy as np
-    >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_target = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_pred1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2]])
-    >>> pose_target1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> import torch
+    >>> pose_pred = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_target = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_pred1 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2.0]]).unsqueeze(0)
+    >>> pose_target1 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
     >>> re_metric = MeanRotationError()
-    >>> re_metric(pose_pred, pose_target)
+    >>> re_metric(pose_pred, pose_target).item()
     0.0
-    >>> re_metric(pose_pred1, pose_target1)
+    >>> re_metric(pose_pred1, pose_target1).item()
     0.0
-    >>> re_metric.summarize()
+    >>> re_metric.summarize().item()
     0.0
     """
     def __init__(self, name='Re'):
@@ -183,16 +185,16 @@ class MeanTranslationError(BaseMetric):
     :param unit_scale: scale for meter
 
     >>> import numpy as np
-    >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_target = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_pred1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2]])
-    >>> pose_target1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> pose_pred = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_target = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_pred1 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2.0]]).unsqueeze(0)
+    >>> pose_target1 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
     >>> te_metric = MeanTranslationError(unit_scale=1.0)
-    >>> te_metric(pose_pred, pose_target)
+    >>> te_metric(pose_pred, pose_target).item()
     0.0
-    >>> te_metric(pose_pred1, pose_target1)
+    >>> te_metric(pose_pred1, pose_target1).item()
     1.0
-    >>> te_metric.summarize()
+    >>> te_metric.summarize().item()
     0.5
     """
     def __init__(self, name='Te', unit_scale=1.0):
@@ -218,17 +220,17 @@ class Cmd(BaseMetric):
     :param degree_threshold:
     :param unit_scale: scale for meter
 
-    >>> import numpy as np
-    >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_target = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_pred1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2]])
-    >>> pose_target1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> import torch
+    >>> pose_pred = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_target = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_pred1 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2.0]]).unsqueeze(0)
+    >>> pose_target1 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
     >>> cmd_metric = Cmd(cm_threshold=5, degree_threshold=5, unit_scale=1.0)
-    >>> cmd_metric(pose_pred, pose_target)
+    >>> cmd_metric(pose_pred, pose_target).item()
     True
-    >>> cmd_metric(pose_pred1, pose_target1)
+    >>> cmd_metric(pose_pred1, pose_target1).item()
     False
-    >>> cmd_metric.summarize()
+    >>> cmd_metric.summarize().item()
     0.5
     """
     def __init__(self, name='Cmd', cm_threshold=5, degree_threshold=5, unit_scale=1.0):
@@ -239,13 +241,13 @@ class Cmd(BaseMetric):
 
     def __call__(self, predict_pose, target_pose, angular_err=None, translation_err=None):
         if angular_err is None or translation_err is None:
-            pred = predict_pose.copy()
-            target = target_pose.copy()
-            pred[:3, 3] = pred[:3, 3] * self.unit_scale
-            target[:3, 3] = target[:3, 3] * self.unit_scale
+            pred = predict_pose.clone()
+            target = target_pose.clone()
+            pred[:, :3, 3] = pred[:, :3, 3] * self.unit_scale
+            target[:, :3, 3] = target[:, :3, 3] * self.unit_scale
             result = cm_degree(pred, target, self.cm_threshold, self.degree_threshold)
         else:
-            result = translation_err * self.unit_scale < 0.01 * self.cm_threshold and angular_err < self.degree_threshold
+            result = torch.logical_and(translation_err * self.unit_scale < 0.01 * self.cm_threshold, angular_err < self.degree_threshold)
         self.result_list.append(result)
 
         return result
@@ -256,25 +258,25 @@ class ADDAUC(BaseMetric):
     ADD AUC
 
     :param name: name of the metric
-    :param model: shape (N, 3), 3D points cloud of object
+    :param model: shape (N, 3) or (b, N, 3), 3D points cloud of object
     :param max_threshold: max error threshold, so threshold is [0, max]
     :param unit_scale: scale for meter unit
     :param symmetric: whether the object is symmetric or not
 
     >>> import numpy as np
-    >>> model_xyz = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    >>> pose_pred = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_target = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_pred1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2]])
-    >>> pose_target1 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
-    >>> pose_pred2 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 3]])
-    >>> pose_target2 = np.array([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]])
+    >>> model_xyz = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1.0]]).unsqueeze(0)
+    >>> pose_pred = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_target = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_pred1 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 2.0]]).unsqueeze(0)
+    >>> pose_target1 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
+    >>> pose_pred2 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 3.0]]).unsqueeze(0)
+    >>> pose_target2 = torch.tensor([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1.0]]).unsqueeze(0)
     >>> add_auc_metric = ADDAUC(model=model_xyz, max_threshold=0.1, unit_scale=1.0, symmetric=False)
     >>> add_auc_metric(pose_pred, pose_target)
     >>> add_auc_metric(pose_pred1, pose_target1)
     >>> add_auc_metric(pose_pred2, pose_target2)
-    >>> add_auc_metric.summarize()
-    0.3333333333333333
+    >>> add_auc_metric.summarize().item()
+    0.3333333432674408
     """
     def __init__(self, name='ADD_AUC', model=None, max_threshold=None, unit_scale=1.0, symmetric=False):
         super().__init__(name)
@@ -291,7 +293,10 @@ class ADDAUC(BaseMetric):
         self.result_list.append(result)
 
     def summarize(self):
-        result = add_auc(self.result_list, self.max_threshold, self.unit_scale)
+        if len(self.result_list):
+            result = add_auc(torch.cat(self.result_list), self.max_threshold, self.unit_scale)
+        else:
+            result = 0
         return result
 
 
