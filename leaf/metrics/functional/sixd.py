@@ -197,8 +197,8 @@ def auc(x, y, x_max_limit=1.0, y_max_limit=1.0):
     """
     Area Under Curve
 
-    :param x: shape (1, )
-    :param y: shape (1, )
+    :param x: shape (n, )
+    :param y: shape (n, )
     :param x_max_limit: max limit value of x axis
     :param y_max_limit: max limit value of y axis
     :return:
